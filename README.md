@@ -747,6 +747,7 @@ Full keyboard key-name table, mouse API, and every drag-and-drop method (`dragTo
 - **Q: Why `page.once` instead of `page.on`?** A: `once` auto-removes the listener after it fires once, which matches a single dialog trigger and avoids a stale handler catching an unrelated later dialog.
 - **Q: How do I answer a `prompt()`?** A: `dialog.accept(inputText)`, the string becomes the prompt's return value; `dialog.accept()` with no argument submits the prompt's current default value.
 - **Q: What can I assert on the dialog itself?** A: `dialog.type()` (`'alert' | 'confirm' | 'prompt'`), `dialog.message()`, and for prompts, `dialog.defaultValue()`, all readable before you `accept()`/`dismiss()`.
+- **Q: Why split alert/confirm/prompt into three tests instead of one?** A: each dialog type is independent, one test per type isolates failures, `test.describe` + `beforeEach` shares the same `page.goto` setup without repeating it three times.
 
 ```mermaid
 sequenceDiagram
@@ -760,16 +761,25 @@ sequenceDiagram
 ```
 
 ```ts
-const inputText = 'Hello from The Testing Academy';
+test.describe('Javascript Alerts', () => {
+    test.beforeEach(async ({ page }) => {
+        await page.goto('https://the-internet.herokuapp.com/javascript_alerts');
+    });
 
-// Register the handler BEFORE the action that opens the dialog
-page.once('dialog', async dialog => {
-    expect(dialog.type()).toBe('prompt');
-    expect(dialog.defaultValue()).toBe('');
-    await dialog.accept(inputText);
+    test('JS Prompt accept 3', async ({ page }) => {
+        const inputText = 'Hello from The Testing Academy';
+
+        // Register the handler BEFORE the action that opens the dialog
+        page.once('dialog', async dialog => {
+            expect(dialog.type()).toBe('prompt');
+            expect(dialog.defaultValue()).toBe('');
+            await dialog.accept(inputText);
+        });
+
+        await page.locator('button', { hasText: 'Click for JS Prompt' }).click();
+        await expect(page.locator('#result')).toHaveText(`You entered: ${inputText}`);
+    });
 });
-
-await page.locator('button', { hasText: 'Click for JS Prompt' }).click();
 ```
 
 ## Configuration Highlights

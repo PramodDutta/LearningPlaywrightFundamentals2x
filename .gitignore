@@ -17,3 +17,9 @@ user-session.json
 # Allure output
 /allure-results/
 /allure-report/
+
+# macOS
+.DS_Store
+
+# Ad-hoc screenshots dropped at repo root by test runs
+/*.png
