@@ -982,6 +982,49 @@ await page.locator('div.pf-v6-c-multiple-file-upload input').setInputFiles([
 | Best for | realistic binaries (png, pdf, xlsx) | size/format edge cases, throwaway data |
 | Spec | `275` | `276` |
 
+#### 14.1 - Asserting the Result: `toHaveText` vs `toContainText`
+
+**Concept:** `toHaveText` requires the element's **whole** text to match; `toContainText` passes on a **substring**. Both auto-retry until the assertion timeout, both trim and collapse whitespace, and both accept a regex or an array (when the locator matches many elements).
+
+**Why:** after `setInputFiles` + submit, the page echoes the filename — sometimes alone (`testdata.txt`), sometimes wrapped in text you don't control (`Upload complete: testdata.txt (29 bytes)`). Picking the wrong matcher either fails on noise or passes on a half-empty element.
+
+**Q&A — why use this?**
+- **Q: Which is the default choice?** A: `toHaveText`. It's stricter, so it catches stray text the app shouldn't be rendering. Drop to `toContainText` only when part of the string (timestamp, byte count, id) is outside your control.
+- **Q: How do the array forms differ?** A: `toHaveText([...])` demands the same count and exact text per element; `toContainText([...])` matches substrings and tolerates extra elements.
+- **Q: Why does `path.join(__dirname, 'testdata.txt')` beat a relative `'./testdata.txt'`?** A: Relative paths resolve against the process CWD (where you ran `npx playwright test`), not the spec file. `__dirname` is the spec's own folder, so the fixture is found no matter where the run starts.
+
+```mermaid
+flowchart TD
+    Q{Do you control the full string?} -->|Yes, static| H["toHaveText&#40;'testdata.txt'&#41;"]
+    Q -->|No: timestamps, counts, ids| C["toContainText&#40;'testdata.txt'&#41;"]
+    Q -->|Pattern, not literal| R["toHaveText&#40;/^Upload complete/&#41;"]
+    H --> P[auto-retries until timeout]
+    C --> P
+    R --> P
+```
+
+```ts
+// <h3>File Uploaded!</h3>
+await expect(page.locator('h3')).toHaveText('File Uploaded!');       // ✅ exact
+await expect(page.locator('h3')).toHaveText('File Uploaded');        // ❌ missing "!"
+
+// <div id="status">Upload complete: testdata.txt (29 bytes)</div>
+await expect(page.locator('#status')).toContainText('testdata.txt'); // ✅ substring
+await expect(page.locator('#status')).toHaveText('testdata.txt');    // ❌ rest unmatched
+
+// Options and arrays
+await expect(page.locator('#status')).toContainText('upload', { ignoreCase: true });
+const items = page.locator('#uploaded-files li');
+await expect(items).toHaveText(['file1.jpg', 'file2.png']);          // exact text, count and order
+await expect(items).toContainText(['file1', 'file2']);               // substrings, extras allowed
+```
+
+| | `toHaveText` | `toContainText` |
+|:--|:--|:--|
+| Match | whole string | substring |
+| Array semantics | same count, exact per item | subset, substring per item |
+| Use when | text fully controlled | dynamic prefix/suffix |
+
 ## Configuration Highlights
 
 Defined in `playwright.config.ts`:

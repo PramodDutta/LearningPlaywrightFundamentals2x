@@ -20,6 +20,9 @@ test.describe('FileUpload handling', () => {
         await expect(page.locator('h3')).toHaveText('File Uploaded!');
         await expect(page.locator('#uploaded-files')).toHaveText('testdata.txt');
         await page.pause();
+        await page.waitForTimeout(15000);
+
+
     });
 
 });
