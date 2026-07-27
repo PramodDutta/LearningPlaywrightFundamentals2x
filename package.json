@@ -9,7 +9,7 @@
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.61.1",
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.1",
     "allure-js-commons": "^3.10.2",
     "allure-playwright": "^3.10.2",
     "dotenv": "^17.4.2"

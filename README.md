@@ -75,13 +75,16 @@ The report updates live *while* tests run — leave it open in a browser tab and
 │   ├── 09_Frame_Iframe/              # frameLocator, nested iframes, enumerating //frame
 │   ├── 10_Keyboard_Hover_Drag_Drop/  # keyboard API, hover menus, drag & drop, right-click
 │   ├── 11_JS_Alerts/                 # alert / confirm / prompt dialog handling
-│   ├── 12_Handle_SVG/                # svg locator, count()/nth() over dynamic result lists
-│   ├── 13_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
+│   ├── 12_Handle_SVG/                # svg locator, shape/chart clicks, SVG map path attributes
+│   ├── 13_Shadow_DOM/                # Shadow-piercing locators, nested shadow roots
+│   ├── 14_FileUpload/                # setInputFiles: disk paths, Buffers, multi-file
+│   ├── 15_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
 │   ├── Template.spec.ts              # Empty spec scaffold, copy for new tests
 │   └── example.spec.ts               # Sample: title check + "Get started" navigation
 ├── utils/
 │   └── CustomReporter.ts   # Custom TTA HTML reporter (implements Playwright's Reporter)
 ├── playwright.config.ts    # Playwright configuration
+├── tsconfig.json           # TS compiler options for specs (ES2022, CommonJS, node types)
 ├── .env.example            # Template for VWO_USER / VWO_PASS — copy to .env
 ├── package.json
 └── .gitignore
@@ -819,6 +822,165 @@ for (let i = 0; i < count; i++) {
     console.log(title);
 }
 ```
+
+#### 12.1 - Clicking SVG Shapes & Reading Chart Bars
+
+**Concept:** inside an inline `<svg>`, every shape (`circle`, `rect`, `path`) is a real DOM node with its own `id`, `class`, and data attributes, so `page.locator('#circle-blue').click()` works exactly like clicking a button. Chart bars carry their data in attributes (`height`, `data-quarter`), so you read values with `getAttribute()` rather than `innerText()` — an SVG `<rect>` has no text.
+
+**Why:** dashboards and charts are drawn, not written. The only way to assert "Q3 is the tallest bar" or "the blue slice was selected" is to enumerate the shape nodes and compare their attributes.
+
+**Q&A — why use this?**
+- **Q: Why `getAttribute('height')` instead of reading text?** A: An SVG `<rect>` renders geometry, not text — the bar's value lives in `height` / `data-*`, never in a text node.
+- **Q: Can `getByRole` reach an SVG shape?** A: Only when the app adds `role` + `aria-label` to it. Chart libraries usually don't, so fall back to `id` / `class` / `data-*`.
+- **Q: How do I find the tallest bar?** A: `.all()` over `.bar`, read each `height` as a number, and track the max — the DOM gives you no "sort by height" selector.
+
+```mermaid
+flowchart TD
+    A["locator&#40;'#circle-blue'&#41;.click&#40;&#41;"] --> B[app writes to #shapes-output]
+    B --> C["expect output toContain 'Blue circle'"]
+    D["locator&#40;'.bar'&#41;.all&#40;&#41;"] --> E{per bar}
+    E --> F["getAttribute&#40;'data-quarter'&#41;"]
+    E --> G["getAttribute&#40;'height'&#41;"]
+    G --> H[compare to find tallest]
+```
+
+```ts
+await page.goto('https://app.thetestingacademy.com/playwright/widgets/svg');
+
+// Shapes are clickable DOM nodes
+await page.locator('#circle-blue').click();
+expect(await page.locator('#shapes-output').innerText()).toContain('Blue circle');
+
+// Bar values live in attributes, not text
+for (const bar of await page.locator('.bar').all()) {
+    const quarter = await bar.getAttribute('data-quarter');
+    const height = await bar.getAttribute('height');
+    console.log(quarter, height);
+}
+```
+
+#### 12.2 - SVG Maps: Matching Regions by Class
+
+**Concept:** an interactive SVG map is hundreds of `<path>` elements, each tagged with a region code in its `class` (`sm_state sm_state_INUP`). Because `svg` is a different XML namespace, XPath needs `*[name()='svg']` / `*[name()='path']` instead of a plain `//svg//path`. Loop the paths, read `class`, and click the one whose code matches.
+
+**Why:** map regions have no text, no id, and no role — the region code buried in the class attribute is the only identifier, and a namespace-naive XPath silently matches nothing.
+
+**Q&A — why use this?**
+- **Q: Why does `//svg//path` return zero nodes?** A: SVG lives in its own XML namespace; XPath 1.0 name tests don't match it. `//*[name()='svg']//*[name()='path']` compares the local name instead and works.
+- **Q: Could I skip XPath?** A: Yes — `page.locator('path.sm_state')` is a CSS selector and namespace-agnostic. The XPath form is shown because axis navigation inside SVG often needs it.
+- **Q: Why keep a code→name map in the spec?** A: The DOM only carries `INUP`; the human-readable "Uttar Pradesh" comes from your fixture, which also doubles as the expected-value source for assertions.
+
+```mermaid
+flowchart TD
+    A[goto SVG map] --> B["//*[name&#40;&#41;='svg']//*[name&#40;&#41;='path' and contains&#40;@class,'sm_state'&#41;]"]
+    B --> C["all&#40;&#41; → Locator[] of regions"]
+    C --> D{"class contains target code?"}
+    D -->|Yes| E["state.click&#40;&#41;"]
+    D -->|No| C
+```
+
+```ts
+const data = { INUP: 'Uttar Pradesh', INMH: 'Maharashtra' /* … */ };
+
+const states = await page.locator(
+    "//div[@id='admin1_map_inner']//*[name()='svg']//*[name()='path' and contains(@class,'sm_state')]"
+).all();
+
+for (const state of states) {
+    const classState = await state.getAttribute('class');
+    if (classState?.includes('INUP')) {
+        await state.click();   // clicks Uttar Pradesh
+    }
+}
+```
+
+### 13 - Shadow DOM
+
+**Concept:** a web component can attach a **shadow root** — a private DOM subtree whose nodes are invisible to `document.querySelector`. Playwright's locators pierce open shadow roots automatically, so `page.getByTestId('card-account').locator('input[name="email"]')` reaches inside without any special API. Nested shadow roots need no extra step either — keep chaining locators.
+
+**Why:** design systems (Lit, Stencil, Salesforce LWC, most `<custom-element>` widgets) hide their internals in shadow DOM. Selenium needs an explicit `shadowRoot` hop per level; Playwright's engine walks through them, so the same locator style you use everywhere else keeps working.
+
+**Q&A — why use this?**
+- **Q: Do I need a `>>>` or `piercing` selector?** A: No. CSS and `getByTestId` / `getByRole` pierce **open** shadow roots by default.
+- **Q: What still fails?** A: `mode: 'closed'` shadow roots — the browser exposes no handle, so no automation tool can reach in. XPath also does not pierce; use CSS or the built-in locators.
+- **Q: Why scope to the host first?** A: Two components can both contain `input[name="email"]`. Anchoring on the host (`getByTestId('card-account')`) keeps strict mode happy and states the intent.
+
+```mermaid
+flowchart TD
+    P[page] --> H["getByTestId&#40;'card-account'&#41; — host element"]
+    H -.->|shadow boundary, pierced automatically| S[shadow root]
+    S --> I["locator&#40;'input[name=email]'&#41;"]
+    S --> N["nested host: getByTestId&#40;'nested-host'&#41;"]
+    N -.->|second boundary| S2[inner shadow root]
+    S2 --> F["getByTestId&#40;'card-inside-submit'&#41;"]
+```
+
+```ts
+await page.goto('https://app.thetestingacademy.com/playwright/widgets/shadow-dom');
+
+// Scope to the host, then reach inside its shadow root
+const card = page.getByTestId('card-account');
+await card.locator('input[name="email"]').fill('student@thetestingacademy.com');
+await card.locator('input[name="password"]').fill('pw');
+await card.getByTestId('card-account-submit').click();
+await expect(page.getByTestId('card-account-status'))
+    .toContainText('student@thetestingacademy.com');
+
+// Another component, same pattern
+const cart = page.getByTestId('counter-cart');
+await cart.getByRole('button', { name: 'Increment' }).click();
+await expect(cart.getByTestId('counter-value')).toHaveText('5');
+
+// Nested shadow roots need no extra hop
+await page.getByTestId('card-inside-email').fill('pramod@thetestingacademy.com');
+await page.getByTestId('card-inside-submit').click();
+```
+
+### 14 - File Upload
+
+**Concept:** `setInputFiles` is Playwright's single API for uploads. Point it at a real path on disk (`path.join(__dirname, 'testdata.txt')`), or synthesize a file entirely in memory with `{ name, mimeType, buffer }`. Pass an array to upload several at once. It sets the `<input type="file">` value directly and fires `change`, so the OS file dialog never opens.
+
+**Why:** the native file picker is an OS window, not part of the page — `click()` on the input opens a dialog no browser automation tool can drive. `setInputFiles` bypasses it completely.
+
+**Q&A — why use this?**
+- **Q: When do I use a `Buffer` instead of a path?** A: When you don't want fixture files in git, or you need to vary content/size per test (e.g. a 10 MB file to trigger a size error).
+- **Q: Does the input need to be visible?** A: No. `setInputFiles` works on hidden inputs — that's why drag-and-drop uploaders (which hide their real input behind a styled drop zone) still work; target the underlying `input[type=file]`.
+- **Q: How do I clear the selection?** A: `setInputFiles([])`. And for multi-upload, the input must carry the `multiple` attribute, otherwise passing an array throws.
+
+```mermaid
+flowchart TD
+    Q{Have a real file on disk?} -->|Yes| A["setInputFiles&#40;path.join&#40;__dirname,'testdata.txt'&#41;&#41;"]
+    Q -->|No — synthesize| B["setInputFiles&#40;{ name, mimeType, buffer }&#41;"]
+    Q -->|Several at once| C["setInputFiles&#40;[f1, f2]&#41; — input needs multiple"]
+    A --> D[change event fires on the input]
+    B --> D
+    C --> D
+    D --> E[Click submit] --> F[Assert uploaded file name]
+```
+
+```ts
+import path from 'path';
+
+// Single file from disk
+await page.goto('https://the-internet.herokuapp.com/upload');
+await page.setInputFiles('#file-upload', path.join(__dirname, 'testdata.txt'));
+await page.click('#file-submit');
+await expect(page.locator('h3')).toHaveText('File Uploaded!');
+await expect(page.locator('#uploaded-files')).toHaveText('testdata.txt');
+
+// Multiple in-memory files — no fixtures on disk, hidden input behind a drop zone
+await page.locator('div.pf-v6-c-multiple-file-upload input').setInputFiles([
+    { name: 'file1.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('image from thetestingacademy') },
+    { name: 'file2.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('this is test') },
+]);
+```
+
+| | Path on disk | In-memory `Buffer` |
+|:--|:--|:--|
+| Fixture in git | yes, committed next to the spec | none |
+| Content control | fixed | per-test, generated |
+| Best for | realistic binaries (png, pdf, xlsx) | size/format edge cases, throwaway data |
+| Spec | `275` | `276` |
 
 ## Configuration Highlights
 
