@@ -78,7 +78,9 @@ The report updates live *while* tests run — leave it open in a browser tab and
 │   ├── 12_Handle_SVG/                # svg locator, shape/chart clicks, SVG map path attributes
 │   ├── 13_Shadow_DOM/                # Shadow-piercing locators, nested shadow roots
 │   ├── 14_FileUpload/                # setInputFiles: disk paths, Buffers, multi-file
-│   ├── 15_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
+│   ├── 15_File_Download/             # waitForEvent('download'), saveAs, suggestedFilename
+│   ├── 16_Scroll_toElement/          # scrollIntoViewIfNeeded, window.scrollBy/scrollTo, lazy lists
+│   ├── 17_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
 │   ├── Template.spec.ts              # Empty spec scaffold, copy for new tests
 │   └── example.spec.ts               # Sample: title check + "Get started" navigation
 ├── utils/
@@ -1024,6 +1026,106 @@ await expect(items).toContainText(['file1', 'file2']);               // substrin
 | Match | whole string | substring |
 | Array semantics | same count, exact per item | subset, substring per item |
 | Use when | text fully controlled | dynamic prefix/suffix |
+
+### 15 - File Download
+
+**Concept:** a download is an **event**, not a locator. Wrap the click that triggers it in `Promise.all([page.waitForEvent('download'), click])`, then use the returned `Download` object: `suggestedFilename()` gives the server-proposed name, `saveAs(path)` copies the file where you want it, `path()` returns Playwright's temp copy.
+
+**Why:** Playwright streams every download into a temp folder that is deleted when the browser context closes. Without `saveAs`, there is nothing left to assert on after the test.
+
+**Q&A — why use this?**
+- **Q: Why `Promise.all` instead of clicking first, then waiting?** A: the download can start before your `waitForEvent` subscribes, and the event would be missed. Register the listener first, resolve both together.
+- **Q: Where does the file go if I never call `saveAs`?** A: a temp path (`download.path()`), auto-deleted on context close. `saveAs` is what makes it persist.
+- **Q: Why does `saveAs('out/')` not work?** A: it takes a **full file path**, not a directory. Join it yourself: `path.join('out', download.suggestedFilename())`. Missing parent folders are created for you.
+
+```mermaid
+sequenceDiagram
+    participant T as Test
+    participant P as Page
+    participant B as Browser
+    T->>P: Promise.all([waitForEvent('download'), click()])
+    P->>B: click download button
+    B-->>T: Download object (streamed to temp)
+    T->>T: suggestedFilename() → "sample-download.txt"
+    T->>T: saveAs(path.join('out', name))
+    T->>T: expect(fs.existsSync(filePath)).toBeTruthy()
+```
+
+```ts
+import { test, expect } from '@playwright/test';
+import path from 'path';
+import fs from 'fs';
+
+test('download the static file and save it', async ({ page }) => {
+    await page.goto('https://app.thetestingacademy.com/playwright/widgets/upload-download');
+
+    const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        page.getByTestId('download-static').click(),
+    ]);
+
+    const filePath = path.join('out', download.suggestedFilename());
+    await download.saveAs(filePath);
+
+    expect(fs.existsSync(filePath)).toBeTruthy();
+});
+```
+
+| | `download.path()` | `download.saveAs(file)` |
+|:--|:--|:--|
+| Location | Playwright temp dir | your chosen path |
+| Survives context close | no | yes |
+| Use for | quick read inside the test | artifacts, content assertions after the run |
+
+> `out/` is gitignored — downloaded files are run artifacts, not fixtures. A stale root-owned file there makes `saveAs` fail with `EACCES`; delete it rather than chasing the test.
+
+### 16 - Scroll to Element
+
+**Concept:** `locator.scrollIntoViewIfNeeded()` scrolls an element into the viewport, and every action (`click`, `fill`, `check`) already does it automatically. Reach for explicit scrolling only when the *scroll itself* is the trigger: lazy-loaded lists, infinite feeds, sticky-header offsets. For page-level jumps use `page.evaluate(() => window.scrollBy(0, 1000))` or `window.scrollTo(0, document.body.scrollHeight)`.
+
+**Why:** lazy content does not exist in the DOM until the user scrolls near it. No wait or assertion will ever make it appear — you must reproduce the scroll that fires the app's IntersectionObserver.
+
+**Q&A — why use this?**
+- **Q: Do I need to scroll before clicking?** A: No. Playwright auto-scrolls as part of actionability. Explicit scrolling is for lazy-load triggers and screenshots, not for reachability.
+- **Q: `scrollIntoViewIfNeeded` or `page.evaluate(window.scrollTo)`?** A: the locator API when you target an element (it waits for the element first); `evaluate` when you want raw pixel/page-level movement with no element in mind.
+- **Q: How do I assert content that appears *after* the scroll?** A: `expect.poll(() => list.count()).toBeGreaterThan(initialCount)` — it retries the count until new items land, unlike a one-shot `expect(await list.count())`.
+
+```mermaid
+flowchart TD
+    Q{Why are you scrolling?} -->|Just to click/fill| A[Do nothing — auto-scroll handles it]
+    Q -->|Trigger lazy load| B["locator.scrollIntoViewIfNeeded&#40;&#41;"]
+    Q -->|Move the page itself| C["page.evaluate&#40;() => window.scrollBy&#40;0, 1000&#41;&#41;"]
+    Q -->|Jump to the very bottom| D["window.scrollTo&#40;0, document.body.scrollHeight&#41;"]
+    B --> E[IntersectionObserver fires, new items render]
+    E --> F["expect.poll&#40;() => list.count&#40;&#41;&#41;.toBeGreaterThan&#40;initial&#41;"]
+```
+
+```ts
+await page.goto('https://app.thetestingacademy.com/playwright/widgets/scroll');
+
+// 1) let Playwright do the scrolling for an element
+await page.getByTestId('deep-anchor').scrollIntoViewIfNeeded();
+
+// 2) raw page scrolling
+await page.evaluate(() => window.scrollBy(0, 1000));
+await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+// 3) lazy list: scroll the last rendered item into view, then poll until more items render
+const list = page.getByTestId('lazy-list').locator('li');
+const initialCount = await list.count();
+await list.last().scrollIntoViewIfNeeded();   // nth(10) would hang — item 11 does not exist yet
+
+await expect.poll(async () => list.count(), {
+    message: 'expected items > 10',
+    timeout: 10_000,
+}).toBeGreaterThan(initialCount);
+```
+
+| | `scrollIntoViewIfNeeded()` | `page.evaluate(window.scrollTo/By)` |
+|:--|:--|:--|
+| Target | a locator (waits for it) | the page/window |
+| Waits for element | yes | no |
+| Best for | lazy triggers, screenshots of an element | bottom-of-page jumps, pixel offsets |
 
 ## Configuration Highlights
 
