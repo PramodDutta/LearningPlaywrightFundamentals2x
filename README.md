@@ -41,6 +41,10 @@ npx playwright test tests/example.spec.ts
 # Run in UI mode (interactive)
 npx playwright test --ui
 
+# Run by priority tag (module 18)
+npm run test:p1          # only @p1
+npm run test:priority    # @p1, then @p2, then @p3
+
 # Debug a test
 npx playwright test --debug
 ```
@@ -80,7 +84,9 @@ The report updates live *while* tests run — leave it open in a browser tab and
 │   ├── 14_FileUpload/                # setInputFiles: disk paths, Buffers, multi-file
 │   ├── 15_File_Download/             # waitForEvent('download'), saveAs, suggestedFilename
 │   ├── 16_Scroll_toElement/          # scrollIntoViewIfNeeded, window.scrollBy/scrollTo, lazy lists
-│   ├── 17_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
+│   ├── 17_Expect_Assertions/         # Value vs locator assertions, soft assertions, negation
+│   ├── 18_Test_hooks/                # Hooks, modifiers, describe modes, tags & priority runs
+│   ├── 19_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
 │   ├── Template.spec.ts              # Empty spec scaffold, copy for new tests
 │   └── example.spec.ts               # Sample: title check + "Get started" navigation
 ├── utils/
@@ -1127,6 +1133,136 @@ await expect.poll(async () => list.count(), {
 | Waits for element | yes | no |
 | Best for | lazy triggers, screenshots of an element | bottom-of-page jumps, pixel offsets |
 
+### 17 - Expect Assertions
+
+**Concept:** Playwright ships two kinds of `expect`. **Value assertions** (`toBe`, `toEqual`, `toBeTruthy`) compare plain JS values synchronously. **Locator assertions** (`toBeVisible`, `toHaveText`, `toHaveCount`) are web-first: they poll the live DOM until the condition holds or the timeout expires, so they must be `await`-ed.
+
+**Why:** a one-shot `expect(await el.isVisible()).toBe(true)` reads the DOM once and fails on any render delay. `await expect(el).toBeVisible()` retries for you and kills that entire class of flake.
+
+**Q&A — why use this?**
+- **Q: When do I `await` an expect?** A: whenever the subject is a Locator, Page, or APIResponse. Never for raw numbers, strings, or objects.
+- **Q: What does `expect.soft` buy me?** A: it records the failure and keeps going, so one run reports every broken assertion instead of stopping at the first. The test still ends up failed.
+- **Q: Why does `.not.toBeChecked()` pass on a box I just checked?** A: a missing `await` on `check()`. The assertion polls and passes on its *first* poll, before the click lands. Always await actions.
+
+```mermaid
+flowchart TD
+    Q{What is the subject?} -->|number / string / object| V[Value assertion — synchronous, no await]
+    Q -->|Locator / Page / APIResponse| L[Web-first assertion — MUST await]
+    L --> P[Polls DOM every ~100ms]
+    P -->|condition true| Pass[✅ pass]
+    P -->|timeout hit| Fail[❌ fail with call log]
+    L --> S{Need every failure in one run?}
+    S -->|yes| Soft["expect.soft&#40;locator&#41; — records, continues"]
+    S -->|no| Hard["expect&#40;locator&#41; — stops the test"]
+```
+
+```ts
+// value assertions — synchronous
+expect(1 + 2).toBe(3);
+expect({ age: 20, role: 'admin' }).toEqual({ role: 'admin', age: 20 });
+
+// locator assertions — awaited, auto-retrying
+const email = page.getByRole('textbox', { name: 'Email Address' });
+await expect(email).toHaveAttribute('type', 'email');
+await expect(page.locator('footer a')).toHaveCount(16);
+
+// soft: each line records its own failure, the test keeps running
+const firstName = page.getByTestId('first-name');
+await expect.soft(firstName).toHaveAttribute('id', 'first-name');
+await expect.soft(firstName).toHaveValue('');
+
+// hard + negation
+await expect(firstName).toBeEnabled();
+await expect(page.locator('#error')).not.toBeVisible();
+```
+
+Full API reference: [`283_Expect.cheatsheet.md`](tests/17_Expect_Assertions/283_Expect.cheatsheet.md).
+
+| | `expect()` (hard) | `expect.soft()` |
+|:--|:--|:--|
+| On failure | throws, test stops immediately | records, test continues |
+| Final verdict | failed | failed (all soft errors reported) |
+| Best for | preconditions the rest depends on | independent field-by-field checks |
+
+### 18 - Test Hooks, Modifiers & Priority
+
+**Concept:** the `test` object carries the whole run-control surface: lifecycle hooks (`beforeAll` / `beforeEach` / `afterEach` / `afterAll`), modifiers (`skip`, `fixme`, `fail`, `slow`, `setTimeout`), suite modes (`describe.serial`, `describe.parallel`, `describe.configure`), and tag-based selection via `--grep`.
+
+**Why:** setup that lives inside each test gets copy-pasted and drifts. Hooks put it in one place, and modifiers let you quarantine a broken test (`fixme`) or a known-failing one (`fail`) without deleting it or leaving the suite red.
+
+**Q&A — why use this?**
+- **Q: `beforeAll` per test or per file?** A: once per *worker*, not per test. If the worker restarts (crash or retry), it runs again.
+- **Q: `skip` vs `fixme` vs `fail`?** A: `skip` = not applicable here (wrong browser/env). `fixme` = broken, do not run. `fail` = must fail; if it passes, the test is reported as failed.
+- **Q: How do I run only the critical tests?** A: tag titles with `@p1 @smoke` and run `npx playwright test --grep @p1` (wired up as `npm run test:p1`).
+
+```mermaid
+flowchart TD
+    A["beforeAll — once per worker"] --> B["beforeEach — fresh page"]
+    B --> C[Test 1]
+    C --> D[afterEach — screenshot on failure]
+    D --> E["beforeEach — fresh page"]
+    E --> F[Test 2]
+    F --> G[afterEach]
+    G --> H["afterAll — teardown"]
+    style A fill:#ecfdf5,stroke:#059669
+    style H fill:#fef2f2,stroke:#ef4444
+```
+
+```ts
+test.beforeAll(async () => console.log('server is up'));          // once per worker
+
+test.beforeEach(async ({ page }) => {                             // before every test
+    await page.goto('https://app.thetestingacademy.com/playwright/');
+});
+
+test('title test', async ({ page, browserName }) => {
+    test.skip(browserName === 'firefox', 'not supported on Firefox');
+    await expect(page).toHaveTitle(/Playwright/);
+});
+
+test.fixme('broken in Safari, fix me', async ({ page }) => { /* never runs */ });
+
+test('expected to fail until backend ships', async ({ page }) => {
+    test.fail();                                                  // passing here = reported failure
+    await expect(page.getByText('New customer area')).toBeVisible();
+});
+
+test.afterEach(async ({ page }, testInfo) => {                    // runs even when the test failed
+    if (testInfo.status !== testInfo.expectedStatus) {
+        await page.screenshot({ path: `out/fail-${testInfo.title}.png`, fullPage: true });
+    }
+});
+
+test.afterAll(async () => console.log('tear down'));
+```
+
+Ordering and tag runs:
+
+```ts
+test.describe.serial('Checkout — must run in order', () => {      // stops at the first failure
+    test('open landing', async () => {});
+    test('add to cart', async () => {});
+});
+
+test.describe.configure({ mode: 'serial' });                      // file-level mode switch
+test('Login test @p1 @smoke', async ({ page }) => {});            // npx playwright test --grep @p1
+```
+
+```bash
+npm run test:p1         # only @p1
+npm run test:priority   # @p1, then @p2, then @p3
+```
+
+Full API tables: [`286_Test_Hook_Cheatsheet.md`](tests/18_Test_hooks/286_Test_Hook_Cheatsheet.md).
+Chrome launch flags for these runs: [`285_Chrome_Arg_List.md`](tests/18_Test_hooks/285_Chrome_Arg_List.md).
+
+| Modifier | Runs? | Reported as |
+|:--|:--|:--|
+| `test.skip()` | no | skipped |
+| `test.fixme()` | no | skipped (known broken) |
+| `test.fail()` | yes | passes only if it fails |
+| `test.slow()` | yes | timeout x3 |
+
 ## Configuration Highlights
 
 Defined in `playwright.config.ts`:
@@ -1136,7 +1272,8 @@ Defined in `playwright.config.ts`:
 - `fullyParallel: false` — test files run serially (dialed back from parallel while module 12's Flipkart-hosted spec is under active development)
 - `reporter: [["line"], ["./utils/CustomReporter.ts"]]` — terminal progress + the custom TTA HTML report (module 05)
 - `trace: 'on'`, `screenshot: 'on'`, `video: 'on'` — full debug artifacts for every run (heavier, dial back for CI)
-- `headless: false`, `viewport: null` + `launchOptions.args: ['--start-maximized']` — browser opens maximized to the real screen size instead of a fixed viewport
+- `headless: false`, `viewport: { width: 1920, height: 1080 }` — browser opens visibly at a fixed full-HD viewport
+- `launchOptions.args: ['--incognito']` — see [`285_Chrome_Arg_List.md`](tests/18_Test_hooks/285_Chrome_Arg_List.md); every Playwright test already gets an isolated context, so this flag is demonstrative
 - Projects: Chromium active; Firefox and WebKit currently commented out
 - CI-aware retries and workers (`process.env.CI`)
 

@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test:p1": "npx playwright test --grep @p1",
+    "test:p2": "npx playwright test --grep @p2",
+    "test:p3": "npx playwright test --grep @p3",
+    "test:priority": "npm run test:p1 && npm run test:p2 && npm run test:p3"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
