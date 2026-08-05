@@ -1,0 +1,47 @@
+[
+    {
+        "description": "valid registration",
+        "name": "Dev Sharma",
+        "username": "dev@test.com",
+        "password": "Strong@123",
+        "confirmPassword": "Strong@123",
+        "shouldPass": true,
+        "expectedError": "Email already exists"
+    },
+    {
+        "description": "password mismatch",
+        "name": "Alice",
+        "username": "alice@test.com",
+        "password": "Strong@123",
+        "confirmPassword": "Different@456",
+        "shouldPass": false,
+        "expectedError": "Passwords do not match"
+    },
+    {
+        "description": "weak password",
+        "name": "Bob",
+        "username": "bob@test.com",
+        "password": "123",
+        "confirmPassword": "123",
+        "shouldPass": false,
+        "expectedError": "Password must be at least 8 characters"
+    },
+    {
+        "description": "duplicate email",
+        "name": "Existing User",
+        "username": "existing@test.com",
+        "password": "Strong@123",
+        "confirmPassword": "Strong@123",
+        "shouldPass": false,
+        "expectedError": "Email already exists"
+    },
+    {
+        "description": "invalid email format",
+        "name": "Charlie",
+        "username": "not-an-email",
+        "password": "Strong@123",
+        "confirmPassword": "Strong@123",
+        "shouldPass": false,
+        "expectedError": "Please enter a valid email"
+    }
+]

@@ -14,9 +14,13 @@
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.1.1",
     "allure-js-commons": "^3.10.2",
     "allure-playwright": "^3.10.2",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
+    "js-yaml": "^5.2.3",
+    "mysql2": "^3.23.2"
   }
 }

@@ -86,7 +86,10 @@ The report updates live *while* tests run — leave it open in a browser tab and
 │   ├── 16_Scroll_toElement/          # scrollIntoViewIfNeeded, window.scrollBy/scrollTo, lazy lists
 │   ├── 17_Expect_Assertions/         # Value vs locator assertions, soft assertions, negation
 │   ├── 18_Test_hooks/                # Hooks, modifiers, describe modes, tags & priority runs
-│   ├── 19_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
+│   ├── 19_Data_Driven_Testing/       # DDT from JSON, CSV, YAML, MySQL & Excel (.xlsx)
+│   │   ├── test-data/                # login.json, *.csv, *.yml, *.sql, *.xlsx fixtures
+│   │   └── util/                     # csvReader, yamlReader, dbReader, excelReader
+│   ├── 20_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
 │   ├── Template.spec.ts              # Empty spec scaffold, copy for new tests
 │   └── example.spec.ts               # Sample: title check + "Get started" navigation
 ├── utils/
@@ -1262,6 +1265,90 @@ Chrome launch flags for these runs: [`285_Chrome_Arg_List.md`](tests/18_Test_hoo
 | `test.fixme()` | no | skipped (known broken) |
 | `test.fail()` | yes | passes only if it fails |
 | `test.slow()` | yes | timeout x3 |
+
+### 19 - Data Driven Testing (JSON, CSV, YAML, MySQL, Excel)
+
+**Concept:** data-driven testing (DDT) keeps one test body and feeds it many rows of data from an external source — a JSON array, a CSV, a YAML list, a MySQL table, or an Excel sheet — so adding a case means adding a row, not a test.
+
+**Why:** copy-pasting the same login test five times with different credentials means five places to fix when a locator changes. One loop over a data file means one.
+
+**Q&A — why use this?**
+- **Q: Where does the loop go — inside or outside `test()`?** A: outside. `for (const row of data) test(...)` creates one *real* test per row, so each gets its own retry, trace and report line. A loop inside a single test hides failures behind the first one.
+- **Q: Why can't MySQL and `.xlsx` use that pattern?** A: Playwright collects tests **synchronously**, and both readers are async. `fs.readFileSync` (JSON/CSV/YAML) returns rows in time; `mysql2` and `exceljs` do not. Those specs load rows in `beforeAll` and run each row as a `test.step`.
+- **Q: How do I keep DB tests from breaking a laptop with no MySQL?** A: gate the suite — `test.skip(!process.env.MYSQL_HOST, '...')` inside `beforeAll`. No DB configured → suite skips, run stays green.
+
+```mermaid
+flowchart TD
+    A{How is the data read?} -->|"Sync — fs.readFileSync"| B["JSON / CSV / YAML"]
+    A -->|"Async — mysql2 / exceljs"| C["MySQL table / .xlsx sheet"]
+    B --> D["Rows ready at collection time"]
+    D --> E["for (row of rows) test(...)<br/>one test per row"]
+    C --> F["Rows arrive in beforeAll"]
+    F --> G["one test + test.step per row"]
+    E --> H["Same test body, mapped to LoginRow"]
+    G --> H
+    style B fill:#ecfdf5,stroke:#059669
+    style C fill:#fff7ed,stroke:#f59e0b
+    style H fill:#eff6ff,stroke:#3b82f6
+```
+
+**Sync sources — one `test()` per row** (`297_DDT_CSV`, `298_JSON_DDT`, `299_DDT_YAML`):
+
+```ts
+import { readYAML, LoginRow } from './util/yamlReader';
+
+// read at module scope, BEFORE Playwright collects tests
+const loginData = readYAML<LoginRow>(path.join(__dirname, 'test-data/login-data.yml'));
+
+for (const data of loginData) {
+    test(`Login with : ${data.description}`, async ({ page }) => {
+        await page.getByRole('textbox', { name: 'Email Address' }).fill(data.username);
+        await page.getByRole('textbox', { name: 'Password' }).fill(data.password);
+        await page.getByRole('button', { name: 'Login to Practice Account' }).click();
+    });
+}
+```
+
+**Async sources — `beforeAll` + `test.step` per row** (`300_DDT_MySQL`, `301_DDT_XLSX`):
+
+```ts
+let loginData: LoginRow[] = [];
+
+test.beforeAll(async () => {
+    test.skip(!isDbConfigured(), 'MYSQL_HOST not set, skipping MySQL DDT');
+    loginData = await readLoginDataFromDB();      // SELECT ... FROM login_data
+});
+
+test('Login with data from MySQL login_data table', async ({ page }) => {
+    for (const data of loginData) {
+        await test.step(`Login with : ${data.description}`, async () => {
+            await page.goto('https://app.thetestingacademy.com/playwright/multiple_element_filter');
+            await page.getByRole('textbox', { name: 'Email Address' }).fill(data.username);
+            await page.getByRole('textbox', { name: 'Password' }).fill(data.password);
+        });
+    }
+});
+```
+
+Every reader maps its source onto the same `LoginRow` shape (`description`, `username`, `password`, `shouldPass`, `expectedError`), so the test body never changes when the source does — only the import line.
+
+| Source | Reader | Sync? | Test granularity | Setup |
+|:--|:--|:--:|:--|:--|
+| JSON | `import data from './x.json'` | ✅ | one `test()` per row | none |
+| CSV | [`util/csvReader.ts`](tests/19_Data_Driven_Testing/util/csvReader.ts) | ✅ | one `test()` per row | none |
+| YAML | [`util/yamlReader.ts`](tests/19_Data_Driven_Testing/util/yamlReader.ts) | ✅ | one `test()` per row | `js-yaml` |
+| MySQL | [`util/dbReader.ts`](tests/19_Data_Driven_Testing/util/dbReader.ts) | ❌ | `test.step` per row | `mysql2` + `.env` + [`login-data.sql`](tests/19_Data_Driven_Testing/test-data/login-data.sql) |
+| Excel `.xlsx` | [`util/excelReader.ts`](tests/19_Data_Driven_Testing/util/excelReader.ts) | ❌ | `test.step` per row | `exceljs` + `node util/generateExcel.js` |
+
+```bash
+# seed the MySQL table once
+mysql -u root -p < tests/19_Data_Driven_Testing/test-data/login-data.sql
+
+# regenerate the Excel fixture from code (keeps the binary reviewable)
+node tests/19_Data_Driven_Testing/util/generateExcel.js
+```
+
+MySQL credentials come from `.env` — `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`. Leave `MYSQL_HOST` unset and module 19's DB spec skips itself.
 
 ## Configuration Highlights
 

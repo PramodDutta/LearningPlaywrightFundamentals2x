@@ -1,0 +1,45 @@
+# Data Driven Testing - YAML test data
+# Same shape as registration-data.json / login-data.csv
+# Read in 299_DDT_YAML.spec.ts via util/yamlReader.ts
+
+- description: valid credentials
+  username: admin@gamil.com
+  password: admin123
+  shouldPass: true
+  expectedError: ""
+
+- description: invalid password
+  username: admin@gamil.com
+  password: wrongpass
+  shouldPass: false
+  expectedError: Invalid credentials
+
+- description: empty username
+  username: ""
+  password: admin123
+  shouldPass: false
+  expectedError: Username is required
+
+- description: empty password
+  username: admin@gamil.com
+  password: ""
+  shouldPass: false
+  expectedError: Password is required
+
+- description: locked account
+  username: locked_user@gamil.com
+  password: pass123
+  shouldPass: false
+  expectedError: Account is locked
+
+- description: special chars in password
+  username: admin@gamil.com
+  password: p@$$w0rd!
+  shouldPass: true
+  expectedError: ""
+
+- description: SQL injection attempt
+  username: "admin' OR '1'='1"
+  password: password
+  shouldPass: false
+  expectedError: Invalid credentials

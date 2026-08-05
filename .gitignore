@@ -17,6 +17,9 @@ user-session.json
 # Files saved by download tests (module 15)
 /out/
 
+# Written by 295_Read_Write_FileSystem.ts
+/output.json
+
 # Allure output
 /allure-results/
 /allure-report/

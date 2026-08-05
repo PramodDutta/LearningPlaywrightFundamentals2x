@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Pramod",
+    "experience": 15,
+    "isTrainer": true,
+    "middleName": "",
+    "skills": [
+      "JavaScript",
+      "Playwright",
+      "Selenium"
+    ],
+    "address": {
+      "city": "Bangalore",
+      "country": "India"
+    }
+  }
+]
