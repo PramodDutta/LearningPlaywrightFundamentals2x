@@ -86,10 +86,11 @@ The report updates live *while* tests run — leave it open in a browser tab and
 │   ├── 16_Scroll_toElement/          # scrollIntoViewIfNeeded, window.scrollBy/scrollTo, lazy lists
 │   ├── 17_Expect_Assertions/         # Value vs locator assertions, soft assertions, negation
 │   ├── 18_Test_hooks/                # Hooks, modifiers, describe modes, tags & priority runs
-│   ├── 19_Data_Driven_Testing/       # DDT from JSON, CSV, YAML, MySQL & Excel (.xlsx)
+│   ├── 19_Data_Driven_Testing/       # DDT from JSON, CSV, YAML, MySQL, Excel & Faker
 │   │   ├── test-data/                # login.json, *.csv, *.yml, *.sql, *.xlsx fixtures
 │   │   └── util/                     # csvReader, yamlReader, dbReader, excelReader
-│   ├── 20_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
+│   ├── 20_Page_Object_Model/         # POM: LoginPage, Inventory, no-POM vs POM comparison
+│   ├── 21_… … 23_Advance_Framework/  # Remaining curriculum modules (scaffolded, WIP)
 │   ├── Template.spec.ts              # Empty spec scaffold, copy for new tests
 │   └── example.spec.ts               # Sample: title check + "Get started" navigation
 ├── utils/
@@ -1349,6 +1350,134 @@ node tests/19_Data_Driven_Testing/util/generateExcel.js
 ```
 
 MySQL credentials come from `.env` — `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`. Leave `MYSQL_HOST` unset and module 19's DB spec skips itself.
+
+### 19.1 - Generated Test Data with Faker
+
+**Concept:** `@faker-js/faker` manufactures realistic test data at runtime — names, emails, phone numbers, passwords — so no data file has to be maintained at all.
+
+**Why:** registration and signup flows reject data that already exists in the database; a hardcoded `test@test.com` passes once and fails on every rerun.
+
+**Q&A — why use this?**
+- **Q: Faker or a data file?** A: file when the *expected result* depends on the exact input (login rules, validation messages). Faker when the input just needs to be unique and well-formed (signup, profile edit).
+- **Q: Doesn't random data make failures unreproducible?** A: yes, that is the cost. Log the generated values (or attach them to the report) and seed with `faker.seed(123)` when a run must be repeatable.
+- **Q: How do I still get N tests instead of one?** A: keep the `for` loop for the test *titles* and call Faker **inside** each test body — see `304_DDT_FakeJS.spec.ts`.
+
+```mermaid
+flowchart LR
+    A["faker.person.firstName()"] --> D[generateUser&#40;&#41;]
+    B["faker.internet.email()"] --> D
+    C["faker.internet.password({ length: 20 })"] --> D
+    D --> E["fill the form"]
+    E --> F["assert the page echoes<br/>the generated value back"]
+    style D fill:#eff6ff,stroke:#3b82f6
+    style F fill:#ecfdf5,stroke:#059669
+```
+
+```ts
+import { faker } from '@faker-js/faker';
+
+function generateUser() {
+    return {
+        firstName: faker.person.firstName(),
+        lastName:  faker.person.lastName(),
+        email:     faker.internet.email(),
+        telephone: faker.phone.number({ style: 'international' }),
+        password:  faker.internet.password({ length: 20, memorable: true, pattern: /[A-Z]/ }),
+    };
+}
+
+test('Register single user via generateUser()', async ({ page }) => {
+    const user = generateUser();
+    await page.goto('https://app.thetestingacademy.com/playwright/tables/practice.html');
+    await page.getByRole('textbox', { name: 'First Name' }).fill(user.firstName);
+    await page.getByRole('textbox', { name: 'Last Name' }).fill(user.lastName);
+    await page.getByRole('button', { name: 'Save profile' }).click();
+    // assert against the generated value, never against a literal
+    await expect(page.locator('#submission-output')).toContainText(user.firstName);
+});
+```
+
+Specs: `302_DDT_FakerJS` (inline), `303_DDT_FakerJS_Advance` (a `generateUser()` factory), `304_DDT_FakeJS` (loop of 5 users, one per email domain).
+
+### 20 - Page Object Model (POM)
+
+**Concept:** POM moves every locator and every page interaction into a class per page, so a spec reads as business steps (`loginPage.login(user, pass)`) instead of a wall of selectors.
+
+**Why:** when a selector changes, a non-POM suite needs an edit in every spec that touched that field; a POM suite needs one edit in one constructor.
+
+**Q&A — why use this?**
+- **Q: What belongs in the page class vs the spec?** A: locators + actions in the class, **assertions in the spec**. A page object that asserts becomes a test in disguise and cannot be reused by a test that expects failure.
+- **Q: Why are the fields `readonly`?** A: the page object binds to one `Page` for its life. `readonly` makes a stray `this.page = otherPage` a compile error, and it costs nothing at runtime (TypeScript erases it).
+- **Q: Do I build the locators in the constructor or in the methods?** A: constructor. Playwright locators are **lazy** — they are only queried when acted on — so creating them up front costs nothing and gives one place to update selectors.
+
+```mermaid
+flowchart TD
+    subgraph Spec["306_POM.spec.ts — reads as business steps"]
+        T1["new LoginPage(page)"] --> T2["loginPage.goto()"]
+        T2 --> T3["loginPage.login('admin','password')"]
+        T3 --> T4["expect(page).toHaveTitle(...)"]
+    end
+    subgraph PO["LoginPage.ts — the only file that knows selectors"]
+        L1["readonly emailInput"] --> L2["getByRole('textbox', { name: 'Username' })"]
+        L3["readonly loginButton"] --> L4["getByTestId('login-button')"]
+    end
+    T3 -.uses.-> L1
+    T3 -.uses.-> L3
+    style Spec fill:#eff6ff,stroke:#3b82f6
+    style PO fill:#ecfdf5,stroke:#059669
+    style T4 fill:#fff7ed,stroke:#f59e0b
+```
+
+The page class — locators in the constructor, actions as methods, no assertions:
+
+```ts
+import { Page, Locator } from '@playwright/test';
+
+export class LoginPage {
+    readonly page: Page;
+    readonly emailInput: Locator;
+    readonly passwordInput: Locator;
+    readonly loginButton: Locator;
+
+    constructor(page: Page) {
+        this.page = page;
+        this.emailInput = page.getByRole('textbox', { name: 'Username' });
+        this.passwordInput = page.getByRole('textbox', { name: 'Password' });
+        this.loginButton = page.getByTestId('login-button').or(page.getByText('Login'));
+    }
+
+    async goto() {
+        await this.page.goto('https://app.thetestingacademy.com/playwright/ttacart/');
+    }
+
+    async login(username: string, password: string) {
+        await this.emailInput.fill(username);
+        await this.passwordInput.fill(password);
+        await this.loginButton.click();
+    }
+}
+```
+
+The spec — three lines, no selectors:
+
+```ts
+test('Login with valid credentials', async ({ page }) => {
+    const loginPage = new LoginPage(page);
+    await loginPage.goto();
+    await loginPage.login('admin', 'password');
+    await expect(page).toHaveTitle('TTACart - Login');   // assertion stays in the spec
+});
+```
+
+| | Without POM (`305_No.POM.spec.ts`) | With POM (`306_POM.spec.ts`) |
+|:--|:--|:--|
+| Selectors | inline in every test | one constructor |
+| Selector change | edit every spec | edit one file |
+| Test reads like | DOM instructions | business steps |
+| Reuse across specs | copy-paste | `new LoginPage(page)` |
+| Cost | none up front | one class per page |
+
+`Inventory.ts` and `LoginPageSnapLocator.ts` are page objects generated straight from the page by the locator-scan workflow — same shape, `.or()` fallback chains included.
 
 ## Configuration Highlights
 
