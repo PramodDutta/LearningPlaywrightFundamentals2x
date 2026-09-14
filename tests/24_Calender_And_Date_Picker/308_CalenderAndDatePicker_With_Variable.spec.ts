@@ -1,10 +1,10 @@
-import { test, expect, FrameLocator, Locator } from '@playwright/test';
+import { test, expect} from '@playwright/test';
 
 test('Test Calender and date picker', async ({ page }) => {
 
     await page.goto('https://app.thetestingacademy.com/playwright/widgets/calendar');
 
-    // Booking Dates
+    // Booking Dates, this can come from a config file or a data file, or can be generated dynamically
     let departureDate = '2026-09-17';
     let returnDate = '2026-10-20';
 
@@ -33,9 +33,7 @@ test('Test Calender and date picker', async ({ page }) => {
     await page.getByTestId('search-flights').click();
 
     // 5. Assertion
-    await expect(page.getByTestId('search-output'))
-        .toContainText(departureDate);
-    await expect(page.getByTestId('search-output'))
-        .toContainText(returnDate);
+    await expect(page.getByTestId('search-output')).toContainText(departureDate);
+    await expect(page.getByTestId('search-output')).toContainText(returnDate);
 
 });
